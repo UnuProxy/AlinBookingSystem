@@ -22,8 +22,10 @@ const adminEmails = process.env.REACT_APP_ADMIN_EMAILS
  */
 export const addApprovedUser = async (userData) => {
   try {
+    const normalizedEmail = String(userData.email || '').trim().toLowerCase();
+
     // Validate email
-    if (!userData.email || !userData.email.endsWith('@gmail.com')) {
+    if (!normalizedEmail || !normalizedEmail.endsWith('@gmail.com')) {
       throw new Error('Only Gmail addresses are allowed');
     }
 
@@ -32,13 +34,13 @@ export const addApprovedUser = async (userData) => {
       throw new Error('Name and role are required');
     }
 
-    console.log('Received user data:', userData); // Debug log
+    console.log('Received user data:', { ...userData, email: normalizedEmail }); // Debug log
 
     // Use email as document ID in 'approvedUsers'
-    const approvedUserRef = doc(db, 'approvedUsers', userData.email);
+    const approvedUserRef = doc(db, 'approvedUsers', normalizedEmail);
 
     // Check if user is already approved
-    const q = query(collection(db, 'approvedUsers'), where('email', '==', userData.email));
+    const q = query(collection(db, 'approvedUsers'), where('email', '==', normalizedEmail));
     const approvedUserSnapshot = await getDocs(q);
     
     if (!approvedUserSnapshot.empty) {
@@ -47,7 +49,7 @@ export const addApprovedUser = async (userData) => {
 
     // Prepare user data for Firestore
     const userDataForFirestore = {
-      email: userData.email,
+      email: normalizedEmail,
       name: userData.name,
       displayName: userData.name, // Ensure displayName is set
       role: userData.role, // Use the role from the form
@@ -85,7 +87,7 @@ export const removeApprovedUser = async (email) => {
       throw new Error('Email is required for user removal');
     }
 
-    const approvedUserRef = doc(db, 'approvedUsers', email);
+    const approvedUserRef = doc(db, 'approvedUsers', String(email).trim().toLowerCase());
     await deleteDoc(approvedUserRef);
 
     return { 
