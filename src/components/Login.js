@@ -1,13 +1,15 @@
 // Login.js
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { db } from '../firebase/firebaseConfig';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 const Login = () => {
-  const { loginWithGoogle, authError, user, userRole, loading, setAuthError } = useAuth();
+  const { loginWithGoogle, loginWithEmail, authError, user, userRole, loading } = useAuth();
   const navigate = useNavigate();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [emailSubmitting, setEmailSubmitting] = useState(false);
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
 
   useEffect(() => {
     if (!loading && user && userRole) {
@@ -19,66 +21,35 @@ const Login = () => {
     }
   }, [user, userRole, loading, navigate]);
 
-  const updateUserActivity = async (userId, userData) => {
-    try {
-      const userRef = doc(db, 'users', userId);
-      
-      await setDoc(userRef, {
-        ...userData,
-        lastLogin: serverTimestamp(),
-        lastActive: serverTimestamp(),
-        loginCount: (userData.loginCount || 0) + 1,
-        deviceInfo: {
-          userAgent: navigator.userAgent,
-          platform: navigator.platform,
-          language: navigator.language
-        },
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-
-      console.log('User activity updated successfully');
-    } catch (error) {
-      console.error('Error updating user activity:', error);
-    }
-  };
-
   const handleGoogleLogin = async () => {
     try {
-      const result = await loginWithGoogle();
-      
-      if (result.user) {
-        // Check if user exists in approvedUsers collection
-        const approvedUserDoc = await getDoc(doc(db, 'approvedUsers', result.user.email));
-        
-        if (approvedUserDoc.exists()) {
-          const approvedData = approvedUserDoc.data();
-          
-          // Prepare user data
-          const userData = {
-            email: result.user.email,
-            displayName: result.user.displayName,
-            photoURL: result.user.photoURL,
-            role: approvedData.role,
-            createdAt: new Date(),
-            // Track first login separately
-            firstLogin: serverTimestamp()
-          };
-
-          // Update user data and activity
-          await updateUserActivity(result.user.uid, userData);
-        } else {
-          // If user is not approved, delete their auth account
-          await result.user.delete();
-          throw new Error('Your account is not approved. Please contact an administrator.');
-        }
-      }
+      setGoogleSubmitting(true);
+      await loginWithGoogle();
     } catch (error) {
       console.error('Login error:', error);
-      setAuthError(error.message);
+    } finally {
+      setGoogleSubmitting(false);
     }
   };
 
-  const isLoginLoading = loading && !user;
+  const handleEmailLogin = async (event) => {
+    event.preventDefault();
+    if (!email || !password) {
+      return;
+    }
+    try {
+      setEmailSubmitting(true);
+      await loginWithEmail(email, password);
+    } catch (error) {
+      console.error('Login error:', error);
+    } finally {
+      setEmailSubmitting(false);
+    }
+  };
+
+  const isAuthLoading = loading && !user;
+  const isGoogleLoading = isAuthLoading || googleSubmitting;
+  const isEmailLoading = isAuthLoading || emailSubmitting;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -109,14 +80,66 @@ const Login = () => {
           </div>
         )}
 
+        <form onSubmit={handleEmailLogin} className="space-y-4">
+          <div>
+            <label htmlFor="login-email" className="block text-sm font-medium text-gray-700">
+              Email
+            </label>
+            <input
+              id="login-email"
+              type="email"
+              autoComplete="email"
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              disabled={isEmailLoading}
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="login-password" className="block text-sm font-medium text-gray-700">
+              Password
+            </label>
+            <input
+              id="login-password"
+              type="password"
+              autoComplete="current-password"
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              disabled={isEmailLoading}
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            className={`w-full flex items-center justify-center gap-3 px-4 py-3 border border-blue-600 rounded-md shadow-sm bg-blue-600 text-white hover:bg-blue-700 transition-colors ${
+              isEmailLoading ? 'cursor-not-allowed opacity-70' : ''
+            }`}
+            disabled={isEmailLoading}
+          >
+            {isEmailLoading ? (
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+            ) : (
+              'Sign in'
+            )}
+          </button>
+        </form>
+
+        <div className="flex items-center gap-3">
+          <div className="h-px flex-1 bg-gray-200"></div>
+          <span className="text-xs uppercase tracking-wider text-gray-400">or</span>
+          <div className="h-px flex-1 bg-gray-200"></div>
+        </div>
+
         <button
           onClick={handleGoogleLogin}
           className={`w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-md shadow-sm bg-white hover:bg-gray-50 transition-colors ${
-            isLoginLoading ? 'cursor-not-allowed opacity-50' : ''
+            isGoogleLoading ? 'cursor-not-allowed opacity-50' : ''
           }`}
-          disabled={isLoginLoading}
+          disabled={isGoogleLoading}
         >
-          {isLoginLoading ? (
+          {isGoogleLoading ? (
             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
           ) : (
             <>

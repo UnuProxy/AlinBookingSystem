@@ -3,10 +3,11 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { auth, googleProvider, db } from '../firebase/firebaseConfig';
 import {
   signInWithPopup,
+  signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged
 } from 'firebase/auth';
-import { doc, setDoc, deleteDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 const AuthContext = createContext({});
 
@@ -23,29 +24,49 @@ export function AuthProvider({ children }) {
   const [userRole, setUserRole] = useState(null);
   const [authError, setAuthError] = useState(null);
 
+  const updateUserActivity = async (authUser, role, existingData = {}) => {
+    try {
+      const userRef = doc(db, 'users', authUser.uid);
+      await setDoc(userRef, {
+        email: authUser.email,
+        name: authUser.displayName,
+        photoURL: authUser.photoURL || null,
+        role: role,
+        lastLogin: serverTimestamp(),
+        lastActive: serverTimestamp(),
+        loginCount: (existingData.loginCount || 0) + 1,
+        deviceInfo: {
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          language: navigator.language
+        },
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    } catch (error) {
+      console.error('Error updating user activity:', error);
+    }
+  };
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
       if (authUser) {
         try {
-          // Check if user already exists in 'users' collection
-          const usersRef = collection(db, 'users');
-          const userQuery = query(usersRef, where('email', '==', authUser.email));
-          const userSnapshot = await getDocs(userQuery);
+          // Check if user already exists in 'users' collection (by UID doc)
+          const userDocRef = doc(db, 'users', authUser.uid);
+          const userSnap = await getDoc(userDocRef);
 
-          if (!userSnapshot.empty) {
-            // User exists in 'users' collection
-            const userDoc = userSnapshot.docs[0];
+          if (userSnap.exists()) {
+            const role = userSnap.data().role;
             setUser(authUser);
-            setUserRole(userDoc.data().role);
+            setUserRole(role);
             setAuthError(null);
+            await updateUserActivity(authUser, role, userSnap.data());
           } else {
-            // Check if user is in 'approvedUsers' collection
-            const approvedUsersRef = collection(db, 'approvedUsers');
-            const approvedQuery = query(approvedUsersRef, where('email', '==', authUser.email));
-            const approvedSnapshot = await getDocs(approvedQuery);
+            // Check if user is in 'approvedUsers' collection (doc ID = email)
+            const approvedUserRef = doc(db, 'approvedUsers', authUser.email);
+            const approvedSnap = await getDoc(approvedUserRef);
 
-            if (approvedSnapshot.empty) {
-              // No approved user, unauthorized
+            if (!approvedSnap.exists()) {
               await signOut(auth);
               setAuthError("Unauthorized user. Please contact the administrator for access.");
               setUser(null);
@@ -54,26 +75,21 @@ export function AuthProvider({ children }) {
               return;
             }
 
-            // Get the approved user's data
-            const approvedUser = approvedSnapshot.docs[0].data();
+            const approvedUser = approvedSnap.data();
             const role = approvedUser.role;
 
             // Create 'users' document
-            const userDocRef = doc(db, 'users', authUser.uid);
             await setDoc(userDocRef, {
               email: authUser.email,
               name: authUser.displayName,
               role: role,
-              createdAt: new Date()
+              createdAt: serverTimestamp()
             });
-
-            // Optionally, remove from 'approvedUsers' to prevent duplicate approvals
-            const approvedUserDocRef = doc(db, 'approvedUsers', authUser.email);
-            await deleteDoc(approvedUserDocRef);
 
             setUser(authUser);
             setUserRole(role);
             setAuthError(null);
+            await updateUserActivity(authUser, role);
           }
         } catch (error) {
           console.error('Error assigning role:', error);
@@ -104,6 +120,18 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const loginWithEmail = async (email, password) => {
+    try {
+      setAuthError(null);
+      await signInWithEmailAndPassword(auth, email, password);
+      return { success: true };
+    } catch (error) {
+      console.error('Email sign-in error:', error);
+      setAuthError(error.message);
+      return { success: false, error: error.message };
+    }
+  };
+
   const logout = async () => {
     try {
       await signOut(auth);
@@ -122,6 +150,7 @@ export function AuthProvider({ children }) {
       user,
       userRole,
       loginWithGoogle,
+      loginWithEmail,
       logout,
       isAdmin,
       isStaff,
@@ -134,4 +163,3 @@ export function AuthProvider({ children }) {
 }
 
 export const useAuth = () => useContext(AuthContext);
-
