@@ -134,7 +134,9 @@ const UserManagement = () => {
     e.preventDefault();
     setError('');
     
-    if (!newUser.email || !newUser.email.endsWith('@gmail.com')) {
+    const normalizedEmail = String(newUser.email || '').trim().toLowerCase();
+
+    if (!normalizedEmail || !normalizedEmail.endsWith('@gmail.com')) {
       setError('Only Gmail addresses are allowed');
       return;
     }
@@ -146,7 +148,7 @@ const UserManagement = () => {
 
     try {
       const userData = {
-        email: newUser.email.trim(),
+        email: normalizedEmail,
         name: newUser.name.trim(),
         displayName: newUser.name.trim(),
         role: newUser.role,
@@ -174,11 +176,14 @@ const UserManagement = () => {
     if (window.confirm('Are you sure you want to remove this approved user?')) {
       try {
         // Find if user exists in active users
-        const matchingActiveUser = activeUsers.find(user => user.email === email);
+        const normalizedEmail = String(email || '').trim().toLowerCase();
+        const matchingActiveUser = activeUsers.find(
+          (user) => String(user.email || '').trim().toLowerCase() === normalizedEmail
+        );
         const userId = matchingActiveUser ? matchingActiveUser.id : null;
         
         // Remove from both collections if needed
-        const result = await removeUserCompletely(email, userId);
+        const result = await removeUserCompletely(normalizedEmail, userId);
         
         if (!result.success) {
           setError(result.error || 'Failed to remove user');
@@ -195,11 +200,14 @@ const UserManagement = () => {
     if (window.confirm('Are you sure you want to remove this active user? This will delete their account.')) {
       try {
         // Find corresponding approved user
-        const isApproved = approvedUsers.some(user => user.email === email);
+        const normalizedEmail = String(email || '').trim().toLowerCase();
+        const isApproved = approvedUsers.some(
+          (user) => String(user.email || '').trim().toLowerCase() === normalizedEmail
+        );
         
         // If user is also in approved list, remove from both
         if (isApproved) {
-          await removeUserCompletely(email, userId);
+          await removeUserCompletely(normalizedEmail, userId);
         } else {
           // Just remove from active users
           await deleteDoc(doc(db, 'users', userId));
@@ -443,4 +451,3 @@ const UserManagement = () => {
 };
 
 export default UserManagement;
-

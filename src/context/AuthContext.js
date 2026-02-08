@@ -7,7 +7,17 @@ import {
   signOut,
   onAuthStateChanged
 } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  doc,
+  setDoc,
+  getDoc,
+  serverTimestamp,
+  collection,
+  query,
+  where,
+  getDocs,
+  limit
+} from 'firebase/firestore';
 
 const AuthContext = createContext({});
 
@@ -23,6 +33,54 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState(null);
   const [authError, setAuthError] = useState(null);
+
+  const getApprovedUserByEmail = async (email) => {
+    if (!email) return null;
+
+    const rawEmail = String(email).trim();
+    const normalizedEmail = rawEmail.toLowerCase();
+
+    // Fast path: doc id equals (normalized) email.
+    const normalizedDocSnap = await getDoc(doc(db, 'approvedUsers', normalizedEmail));
+    if (normalizedDocSnap.exists()) {
+      return { id: normalizedDocSnap.id, ...normalizedDocSnap.data() };
+    }
+
+    // Back-compat: doc id may equal raw email (older data).
+    if (rawEmail !== normalizedEmail) {
+      const rawDocSnap = await getDoc(doc(db, 'approvedUsers', rawEmail));
+      if (rawDocSnap.exists()) {
+        return { id: rawDocSnap.id, ...rawDocSnap.data() };
+      }
+    }
+
+    // Back-compat: doc id may be UID or auto-id; fall back to querying by email field.
+    const normalizedQuery = query(
+      collection(db, 'approvedUsers'),
+      where('email', '==', normalizedEmail),
+      limit(1)
+    );
+    const normalizedMatches = await getDocs(normalizedQuery);
+    if (!normalizedMatches.empty) {
+      const match = normalizedMatches.docs[0];
+      return { id: match.id, ...match.data() };
+    }
+
+    if (rawEmail !== normalizedEmail) {
+      const rawQuery = query(
+        collection(db, 'approvedUsers'),
+        where('email', '==', rawEmail),
+        limit(1)
+      );
+      const rawMatches = await getDocs(rawQuery);
+      if (!rawMatches.empty) {
+        const match = rawMatches.docs[0];
+        return { id: match.id, ...match.data() };
+      }
+    }
+
+    return null;
+  };
 
   const updateUserActivity = async (authUser, role, existingData = {}) => {
     try {
@@ -51,6 +109,8 @@ export function AuthProvider({ children }) {
     const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
       if (authUser) {
         try {
+          const normalizedEmail = authUser.email ? authUser.email.trim().toLowerCase() : null;
+
           // Check if user already exists in 'users' collection (by UID doc)
           const userDocRef = doc(db, 'users', authUser.uid);
           const userSnap = await getDoc(userDocRef);
@@ -62,26 +122,29 @@ export function AuthProvider({ children }) {
             setAuthError(null);
             await updateUserActivity(authUser, role, userSnap.data());
           } else {
-            // Check if user is in 'approvedUsers' collection (doc ID = email)
-            const approvedUserRef = doc(db, 'approvedUsers', authUser.email);
-            const approvedSnap = await getDoc(approvedUserRef);
+            // Check if user is in 'approvedUsers' collection.
+            // Historically, doc IDs have been stored as email, UID, or auto-id, so we support all.
+            const approvedUser = await getApprovedUserByEmail(normalizedEmail || authUser.email);
 
-            if (!approvedSnap.exists()) {
+            if (!approvedUser) {
               await signOut(auth);
-              setAuthError("Unauthorized user. Please contact the administrator for access.");
+              setAuthError(
+                normalizedEmail
+                  ? `Unauthorized user (${normalizedEmail}). Please contact the administrator for access.`
+                  : 'Unauthorized user. Please contact the administrator for access.'
+              );
               setUser(null);
               setUserRole(null);
               setLoading(false);
               return;
             }
 
-            const approvedUser = approvedSnap.data();
             const role = approvedUser.role;
 
             // Create 'users' document
             await setDoc(userDocRef, {
-              email: authUser.email,
-              name: authUser.displayName,
+              email: normalizedEmail || authUser.email,
+              name: authUser.displayName || approvedUser.name || approvedUser.displayName || (normalizedEmail || authUser.email),
               role: role,
               createdAt: serverTimestamp()
             });
