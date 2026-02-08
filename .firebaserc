@@ -1,6 +1,7 @@
 {
   "projects": {
-    "default": "crm-boats"
+    "default": "crm-boats",
+    "bookingsystemalin": "bookingsystemalin"
   },
   "targets": {},
   "etags": {}

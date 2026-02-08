@@ -48,6 +48,7 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
+    "dev": "npm run start",
     "start": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts start",
     "build": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts build",
     "test": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts test",

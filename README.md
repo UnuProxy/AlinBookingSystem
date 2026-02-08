@@ -2,6 +2,13 @@
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
+## Setup
+
+1. Create a local env file from the template: `cp .env.example .env.local`
+2. Fill in your Firebase values in `.env.local`
+3. Install dependencies: `npm install`
+4. Start the dev server: `npm run dev` (alias for `npm start`)
+
 ## Available Scripts
 
 In the project directory, you can run:
