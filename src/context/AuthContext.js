@@ -157,7 +157,26 @@ export function AuthProvider({ children }) {
         } catch (error) {
           console.error('Error assigning role:', error);
           await signOut(auth);
-          setAuthError("Failed to assign role. Please contact the administrator.");
+          const errorCode = error?.code ? String(error.code) : null;
+          let message = 'Failed to assign role.';
+
+          if (errorCode === 'permission-denied') {
+            message += ' Firestore rules are blocking access.';
+          } else if (errorCode === 'unavailable') {
+            message += ' Firestore is unavailable (network/server issue).';
+          }
+
+          if (errorCode) {
+            message += ` (${errorCode})`;
+          }
+
+          if (error?.message) {
+            const details = String(error.message).slice(0, 300);
+            message += ` ${details}`;
+          }
+
+          message += ' Please contact the administrator.';
+          setAuthError(message);
           setUser(null);
           setUserRole(null);
         }
