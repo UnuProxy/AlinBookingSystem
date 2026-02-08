@@ -2,31 +2,48 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow access only for authenticated users
-    match /{document=**} {
-      allow read, write: if request.auth != null;
+    function signedIn() {
+      return request.auth != null;
     }
 
-    // Example: Restrict access to a specific collection (e.g., "users")
+    function userEmail() {
+      return signedIn() && request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : null;
+    }
+
+    function approvedUserDoc() {
+      return /databases/$(database)/documents/approvedUsers/$(userEmail());
+    }
+
+    function isApproved() {
+      return signedIn() && userEmail() != null && exists(approvedUserDoc());
+    }
+
+    function isAdmin() {
+      return isApproved() && get(approvedUserDoc()).data.role == 'admin';
+    }
+
+    // Approved users registry:
+    // - Any signed-in user can read ONLY their own approval doc by email ID.
+    // - Only admins can list / create / update / delete approval docs.
+    match /approvedUsers/{docId} {
+      allow get: if signedIn() && userEmail() != null && docId == userEmail();
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // User profiles/activity:
+    // - Users can manage their own doc by UID.
+    // - Admins can manage all.
     match /users/{userId} {
-      // Only the user who owns this document can read or write
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if signedIn() && request.auth.uid == userId;
+      allow read, write: if isAdmin();
     }
 
-    // Example: Public collection where everyone can read but only authenticated users can write
-    match /public/{docId} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
-
-    // Example: Allow admins to read/write to an "admin" collection
-    match /admin/{docId} {
-      allow read, write: if request.auth.token.admin == true;
+    // Default: allow app data access only to approved users.
+    match /{document=**} {
+      allow read, write: if isApproved();
     }
   }
 }
-
-
-
-
-
