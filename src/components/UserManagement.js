@@ -1,5 +1,5 @@
 // UserManagement.js
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { db } from '../firebase/firebaseConfig';
 import { collection, query, onSnapshot, deleteDoc, doc } from 'firebase/firestore';
 import { addApprovedUser, removeApprovedUser } from '../utils/userManagement';
@@ -50,16 +50,19 @@ const formatLastLogin = (timestamp) => {
 };
 
 // Enhanced function to remove user from both collections
-const removeUserCompletely = async (email, userId = null) => {
+const removeUserCompletely = async (email, userIds = []) => {
   try {
+    const ids = Array.isArray(userIds) ? userIds.filter(Boolean) : [userIds].filter(Boolean);
+
     // First remove from approvedUsers collection
     await removeApprovedUser(email);
     
-    // If we have a userId, also remove from users collection
-    if (userId) {
-      await deleteDoc(doc(db, 'users', userId));
-      console.log(`User ${email} removed from users collection`);
-    }
+    // Remove any matching docs from users collection
+    await Promise.all(
+      ids.map(async (id) => {
+        await deleteDoc(doc(db, 'users', id));
+      })
+    );
     
     return { 
       success: true, 
@@ -87,6 +90,80 @@ const UserManagement = () => {
   const [error, setError] = useState('');
 
   const admin = isAdmin();
+
+  const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
+  const mergedUsers = useMemo(() => {
+    const byEmail = new Map();
+
+    const tsToMillis = (ts) => {
+      if (!ts) return null;
+      if (typeof ts.toMillis === 'function') return ts.toMillis();
+      if (typeof ts.toDate === 'function') return ts.toDate().getTime();
+      if (ts instanceof Date) return ts.getTime();
+      return null;
+    };
+
+    const pickMostRecent = (a, b) => {
+      const aMs = tsToMillis(a);
+      const bMs = tsToMillis(b);
+      if (aMs == null) return b;
+      if (bMs == null) return a;
+      return aMs >= bMs ? a : b;
+    };
+
+    approvedUsers.forEach((approved) => {
+      const email = normalizeEmail(approved.email);
+      if (!email) return;
+
+      byEmail.set(email, {
+        email,
+        approved: true,
+        active: false,
+        role: approved.role,
+        name: approved.displayName || approved.name || '',
+        createdAt: approved.createdAt || null,
+        lastActive: null,
+        userIds: [],
+      });
+    });
+
+    activeUsers.forEach((active) => {
+      const email = normalizeEmail(active.email);
+      if (!email) return;
+
+      const existing = byEmail.get(email) || {
+        email,
+        approved: false,
+        active: false,
+        role: null,
+        name: '',
+        createdAt: null,
+        lastActive: null,
+        userIds: [],
+      };
+
+      const lastActive = active.lastActive || active.lastLogin || null;
+      const role = existing.role || active.role || 'staff';
+      const name = existing.name || active.displayName || active.name || '';
+
+      byEmail.set(email, {
+        ...existing,
+        active: true,
+        role,
+        name,
+        createdAt: existing.createdAt || active.createdAt || null,
+        lastActive: pickMostRecent(existing.lastActive, lastActive),
+        userIds: existing.userIds.includes(active.id) ? existing.userIds : [...existing.userIds, active.id],
+      });
+    });
+
+    return Array.from(byEmail.values()).sort((a, b) => {
+      if (a.role === 'admin' && b.role !== 'admin') return -1;
+      if (a.role !== 'admin' && b.role === 'admin') return 1;
+      return a.email.localeCompare(b.email);
+    });
+  }, [approvedUsers, activeUsers]);
 
   useEffect(() => {
     if (loading) {
@@ -172,18 +249,20 @@ const UserManagement = () => {
     }
   };
 
-  const handleRemoveApprovedUser = async (email) => {
-    if (window.confirm('Are you sure you want to remove this approved user?')) {
+  const handleRemoveUser = async (email, userIds = []) => {
+    if (window.confirm('Are you sure you want to remove this user?')) {
       try {
-        // Find if user exists in active users
-        const normalizedEmail = String(email || '').trim().toLowerCase();
-        const matchingActiveUser = activeUsers.find(
-          (user) => String(user.email || '').trim().toLowerCase() === normalizedEmail
+        const normalizedEmail = normalizeEmail(email);
+
+        const ids = Array.isArray(userIds) ? userIds : [userIds];
+        const fallbackIds = activeUsers
+          .filter((user) => normalizeEmail(user.email) === normalizedEmail)
+          .map((user) => user.id);
+
+        const result = await removeUserCompletely(
+          normalizedEmail,
+          [...new Set([...ids, ...fallbackIds])].filter(Boolean)
         );
-        const userId = matchingActiveUser ? matchingActiveUser.id : null;
-        
-        // Remove from both collections if needed
-        const result = await removeUserCompletely(normalizedEmail, userId);
         
         if (!result.success) {
           setError(result.error || 'Failed to remove user');
@@ -191,30 +270,6 @@ const UserManagement = () => {
       } catch (err) {
         console.error('Error removing user:', err);
         setError('Failed to remove user');
-      }
-    }
-  };
-
-  // Additional function to remove an active user
-  const handleRemoveActiveUser = async (userId, email) => {
-    if (window.confirm('Are you sure you want to remove this active user? This will delete their account.')) {
-      try {
-        // Find corresponding approved user
-        const normalizedEmail = String(email || '').trim().toLowerCase();
-        const isApproved = approvedUsers.some(
-          (user) => String(user.email || '').trim().toLowerCase() === normalizedEmail
-        );
-        
-        // If user is also in approved list, remove from both
-        if (isApproved) {
-          await removeUserCompletely(normalizedEmail, userId);
-        } else {
-          // Just remove from active users
-          await deleteDoc(doc(db, 'users', userId));
-        }
-      } catch (err) {
-        console.error('Error removing active user:', err);
-        setError('Failed to remove active user');
       }
     }
   };
@@ -250,9 +305,9 @@ const UserManagement = () => {
         </div>
       )}
 
-      {/* Active Users Table */}
+      {/* Users Table (merged approved + active) */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <h3 className="px-4 sm:px-6 py-3 text-base sm:text-lg font-semibold">Active Users</h3>
+        <h3 className="px-4 sm:px-6 py-3 text-base sm:text-lg font-semibold">Users</h3>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -260,16 +315,17 @@ const UserManagement = () => {
                 <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                 <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
                 <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                 <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Active</th>
                 <th className="px-3 sm:px-6 py-2 sm:py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {activeUsers.map((user) => (
-                <tr key={user.id}>
+              {mergedUsers.map((user) => (
+                <tr key={user.email}>
                   <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
                     <div className="text-xs sm:text-sm font-medium text-gray-900">
-                      {user.displayName || user.name || 'N/A'}
+                      {user.name || 'N/A'}
                     </div>
                   </td>
                   <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
@@ -285,18 +341,37 @@ const UserManagement = () => {
                     </span>
                   </td>
                   <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                    <div className="text-xs sm:text-sm text-gray-500">
-                      {formatLastLogin(user.lastLogin)}
+                    <div className="flex flex-wrap gap-2">
+                      {user.approved && (
+                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
+                          Approved
+                        </span>
+                      )}
+                      {user.active && (
+                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                          Active
+                        </span>
+                      )}
+                      {user.userIds.length > 1 && (
+                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-amber-100 text-amber-800">
+                          {user.userIds.length} records
+                        </span>
+                      )}
                     </div>
-                    {user.lastLogin && user.lastLogin.toDate && (
+                  </td>
+                  <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
+                    <div className="text-xs sm:text-sm text-gray-500">
+                      {formatLastLogin(user.lastActive)}
+                    </div>
+                    {user.lastActive && user.lastActive.toDate && (
                       <div className="hidden sm:block text-xs text-gray-400 mt-1">
-                        {new Date(user.lastLogin.toDate()).toLocaleString()}
+                        {new Date(user.lastActive.toDate()).toLocaleString()}
                       </div>
                     )}
                   </td>
                   <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
-                      onClick={() => handleRemoveActiveUser(user.id, user.email)}
+                      onClick={() => handleRemoveUser(user.email, user.userIds)}
                       className="text-red-600 hover:text-red-900 p-2"
                       aria-label="Delete user"
                     >
@@ -305,70 +380,10 @@ const UserManagement = () => {
                   </td>
                 </tr>
               ))}
-              {activeUsers.length === 0 && (
+              {mergedUsers.length === 0 && (
                 <tr>
-                  <td colSpan="5" className="px-3 sm:px-6 py-4 text-center text-sm text-gray-500">
-                    No active users found
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Approved Users Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <h3 className="px-4 sm:px-6 py-3 text-base sm:text-lg font-semibold">Approved Users</h3>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-                <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created At</th>
-                <th className="px-3 sm:px-6 py-2 sm:py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {approvedUsers.map((user) => (
-                <tr key={user.id}>
-                  <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                    <div className="text-xs sm:text-sm font-medium text-gray-900">
-                      {user.displayName || user.name || 'N/A'}
-                    </div>
-                  </td>
-                  <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                    <div className="text-xs sm:text-sm text-gray-500 truncate max-w-[120px] sm:max-w-none">
-                      {user.email}
-                    </div>
-                  </td>
-                  <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      user.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'
-                    }`}>
-                      {user.role}
-                    </span>
-                  </td>
-                  <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500">
-                    {user.createdAt && user.createdAt.toDate ? new Date(user.createdAt.toDate()).toLocaleDateString() : 'N/A'}
-                  </td>
-                  <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={() => handleRemoveApprovedUser(user.email)}
-                      className="text-red-600 hover:text-red-900 p-2"
-                      aria-label="Delete user"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {approvedUsers.length === 0 && (
-                <tr>
-                  <td colSpan="5" className="px-3 sm:px-6 py-4 text-center text-sm text-gray-500">
-                    No approved users found
+                  <td colSpan="6" className="px-3 sm:px-6 py-4 text-center text-sm text-gray-500">
+                    No users found
                   </td>
                 </tr>
               )}
