@@ -21,6 +21,35 @@ import {
 
 const AuthContext = createContext({});
 
+const formatAuthError = (error, { actionLabel } = {}) => {
+  const errorCode = error?.code ? String(error.code) : null;
+  const rawMessage = error?.message ? String(error.message) : 'Authentication failed.';
+
+  if (errorCode === 'auth/unauthorized-domain') {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+    const hostHint = hostname ? ` (${hostname})` : '';
+    const actionHint = actionLabel ? `${actionLabel} ` : '';
+
+    const localhostHint =
+      hostname === '127.0.0.1'
+        ? ' You are using 127.0.0.1; Firebase does not always authorize it by default. Try using http://localhost instead, or add 127.0.0.1 to Authorized domains.'
+        : '';
+
+    return (
+      `${actionHint}is blocked for this domain${hostHint}. ` +
+      `Firebase Auth only allows sign-in from whitelisted domains. ` +
+      `Go to Firebase Console → Authentication → Settings → Authorized domains and add ` +
+      `${hostname || 'this hostname'} (and any production domain you use).` +
+      (origin ? ` Current origin: ${origin}.` : '') +
+      localhostHint
+    );
+  }
+
+  // Fall back to Firebase-provided message, but keep it compact.
+  return rawMessage;
+};
+
 /**
  * Fetch admin emails from environment variables.
  * Ensure that these emails correspond to users who should have admin privileges.
@@ -197,8 +226,9 @@ export function AuthProvider({ children }) {
       return { success: true };
     } catch (error) {
       console.error('Google sign-in error:', error);
-      setAuthError(error.message);
-      return { success: false, error: error.message };
+      const message = formatAuthError(error, { actionLabel: 'Google sign-in' });
+      setAuthError(message);
+      return { success: false, error: message };
     }
   };
 
